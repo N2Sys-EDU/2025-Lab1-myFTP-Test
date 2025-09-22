@@ -586,6 +586,161 @@ TEST(FTPServer, MultiPut) {
     clearProcess(server_pid);
 }
 
+TEST(FTPServer, GetBig) {
+    pid_t server_pid, client_pid;
+    int server_port, client_fd;
+    std::string cmd_str;
+
+    if (prepare(client_fd, server_port, server_pid, client_pid, 3, 1) != 0)
+        return ;
+
+    cmd_str = "open 127.0.0.1 " + std::to_string(server_port) + "\n";
+    write(client_fd, cmd_str.c_str(), cmd_str.length());
+    usleep(500000);
+
+    /** Generate Content **/
+    uint32_t random_name = rand() % 1000;
+    uint32_t random_content = rand() % 10;
+    std::ofstream fout((tmp_dir_ser / (std::to_string(random_name) + ".txt")).string(), std::ios::out);
+    for (int i = 0; i < 1000000; i ++)
+        fout << (random_content + i) % 10;
+    fout.close();
+    usleep(500000);
+    /** Generate Content **/
+
+    cmd_str = "get " + std::to_string(random_name) + ".txt\n";
+    write(client_fd, cmd_str.c_str(), cmd_str.length());
+    usleep(1000000);
+
+    std::ifstream fin((tmp_dir_cli / (std::to_string(random_name) + ".txt")).string(), std::ios::in);
+    char get_content;
+    if (fin) {
+        for (int i = 0; i < 1000000; i ++) {
+            if (fin >> get_content) {
+                EXPECT_EQ((get_content - '0'), ((random_content + i) % 10));
+            } else {
+                EXPECT_EQ(0, 1);
+            }
+        }
+        fin.close();
+    } else EXPECT_EQ(0, 1);
+
+    clearProcess(client_pid);
+    clearProcess(server_pid);
+}
+
+TEST(FTPServer, PutBig) {
+    pid_t server_pid, client_pid;
+    int server_port, client_fd;
+    std::string cmd_str;
+
+    if (prepare(client_fd, server_port, server_pid, client_pid, 4, 1) != 0)
+        return ;
+
+    cmd_str = "open 127.0.0.1 " + std::to_string(server_port) + "\n";
+    write(client_fd, cmd_str.c_str(), cmd_str.length());
+    usleep(500000);
+
+    /** Generate Content **/
+    uint32_t random_name = rand() % 1000;
+    uint32_t random_content = rand() % 10;
+    std::ofstream fout((tmp_dir_cli / (std::to_string(random_name) + ".txt")).string(), std::ios::out);
+    for (int i = 0; i < 1000000; i ++)
+        fout << (random_content + i) % 10;
+    fout.close();
+    usleep(500000);
+    /** Generate Content **/
+
+    cmd_str = "put " + std::to_string(random_name) + ".txt\n";
+    write(client_fd, cmd_str.c_str(), cmd_str.length());
+    usleep(1000000);
+
+    std::ifstream fin((tmp_dir_ser / (std::to_string(random_name) + ".txt")).string(), std::ios::in);
+    char get_content;
+    if (fin) {
+        for (int i = 0; i < 1000000; i ++) {
+            if (fin >> get_content) {
+                EXPECT_EQ(get_content - '0', (random_content + i) % 10);
+            } else
+                EXPECT_EQ(0, -1);
+        }
+    } else EXPECT_EQ(0, 1);
+
+    clearProcess(client_pid);
+    clearProcess(server_pid);
+}
+
+TEST(FTPServer, MultiCdList) {
+    pid_t server_pid, client_pid[4];
+    int server_port, client_fd[4];
+    std::string cmd_str;
+
+    if (prepareMulti(client_fd, server_port, server_pid, client_pid, 4, 1) != 0)
+        return ;
+
+    cmd_str = "open 127.0.0.1 " + std::to_string(server_port) + "\n";
+    for (int i = 0; i < 4; i ++)
+        write(client_fd[i], cmd_str.c_str(), cmd_str.length());
+    usleep(500000);
+
+    /** Generate Directory **/
+    uint32_t random_dirs[4];
+    for (int i = 0; i < 4; i ++) {
+        random_dirs[i] = i == 0 ? (rand() % 900) : (random_dirs[i-1] + 1 + (rand() % 10));
+        std::filesystem::create_directory(tmp_dir_ser / std::to_string(random_dirs[i]));
+    }
+    /** Generate Directory **/
+
+    /** Generate Content **/
+    uint32_t random_names[4];
+    uint32_t random_contents[4];
+
+    for (int i = 0; i < 4; i ++) {
+        for(int j = 0; j < 4; j ++) {
+            random_names[j] = j == 0 ? (rand() % 900) : (random_names[j-1] + 1 + (rand() % 10));
+            random_contents[j] = rand() % 1000;
+            std::ofstream fout((tmp_dir_ser / std::to_string(random_dirs[i]) / (std::to_string(random_names[j]) + ".txt")).string(), std::ios::out);
+            fout << random_contents[j];
+            fout.close();
+        }
+    }
+    usleep(500000);
+    /** Generate Content **/
+
+    for (int i = 0; i < 4; i ++) {
+        cmd_str = "cd " + std::to_string(random_dirs[i]) + "\n";
+        write(client_fd[i], cmd_str.c_str(), cmd_str.length());
+    }
+    usleep(500000);
+
+    cmd_str = "ls\n";
+    for (int i = 0; i < 4; i ++)
+        write(client_fd[i], cmd_str.c_str(), cmd_str.length());
+    usleep(1000000);
+
+    for (int i = 0; i < 4; i ++) {
+        FILE* fin = fopen((tmp_dir_clis[i] / "tmp.out").string().c_str(), "r");
+        EXPECT_NE(fin, nullptr);
+        char buff_list[2048];
+        int n = ::fread(buff_list, 1, 2048, fin);
+        fclose(fin);
+
+        chdir((tmp_dir_ser / std::to_string(random_dirs[i])).string().c_str());
+        FILE* fin_std = popen("ls", "r");
+        char buff_list_std[2048];
+        int m = ::fread(buff_list_std, 1, 2048, fin_std);
+
+        EXPECT_EQ(n, m);
+        if (n == m) EXPECT_EQ(memcmp(buff_list_std, buff_list, n), 0);
+    }
+
+    chdir(current_dir.string().c_str());
+
+    for (int i = 0; i < 4; i ++)
+        clearProcess(client_pid[i]);
+    clearProcess(server_pid);
+}
+
 /*********** FTP_SERVER ***********/
 /*********** FTP_SERVER ***********/
 
@@ -710,5 +865,96 @@ TEST(FTPClient, Put) {
     clearProcess(client_pid);
     clearProcess(server_pid);
 }
-/*********** FTP_CLIENT ***********/
-/*********** FTP_CLIENT ***********/
+
+TEST(FTPClient, GetBig) {
+    pid_t server_pid, client_pid;
+    int server_port, client_fd;
+    std::string cmd_str;
+
+    if (prepare(client_fd, server_port, server_pid, client_pid, 3, 0) != 0)
+        return ;
+
+    cmd_str = "open 127.0.0.1 " + std::to_string(server_port) + "\n";
+    write(client_fd, cmd_str.c_str(), cmd_str.length());
+    usleep(500000);
+
+    /** Generate Content **/
+    uint32_t random_name = rand() % 1000;
+    uint32_t random_content = rand() % 10;
+    std::ofstream fout((tmp_dir_ser / (std::to_string(random_name) + ".txt")).string(), std::ios::out);
+    for (int i = 0; i < 1000000; i ++) {
+        fout << (random_content + i) % 10;
+    }
+    fout.close();
+    usleep(500000);
+    /** Generate Content **/
+
+    cmd_str = "get " + std::to_string(random_name) + ".txt\n";
+    write(client_fd, cmd_str.c_str(), cmd_str.length());
+    usleep(1000000);
+
+    std::ifstream fin((tmp_dir_cli / (std::to_string(random_name) + ".txt")).string(), std::ios::in);
+    char get_content;
+    if (fin) {
+        for (int i = 0; i < 1000000; i ++) {
+            if (fin >> get_content) {
+                EXPECT_EQ(get_content - '0', (random_content + i) % 10);
+            } else 
+                EXPECT_EQ(0, 1);
+        }
+        fin.close();
+    } else EXPECT_EQ(0, 1);
+    // EXPECT_EQ(get_content, random_content);
+
+    clearProcess(client_pid);
+    clearProcess(server_pid);
+}
+
+TEST(FTPClient, PutBig) {
+    pid_t server_pid, client_pid;
+    int server_port, client_fd;
+    std::string cmd_str;
+
+    if (prepare(client_fd, server_port, server_pid, client_pid, 4, 0) != 0)
+        return ;
+
+    cmd_str = "open 127.0.0.1 " + std::to_string(server_port) + "\n";
+    write(client_fd, cmd_str.c_str(), cmd_str.length());
+    usleep(500000);
+
+    /** Generate Content **/
+    uint32_t random_name = rand() % 1000;
+    uint32_t random_content = rand() % 10;
+    std::ofstream fout((tmp_dir_cli / (std::to_string(random_name) + ".txt")).string(), std::ios::out);
+    for (int i = 0; i < 1000000; i ++) {
+        fout << (random_content + i) % 10;
+    }
+    fout.close();
+    usleep(500000);
+    /** Generate Content **/
+
+    cmd_str = "put " + std::to_string(random_name) + ".txt\n";
+    write(client_fd, cmd_str.c_str(), cmd_str.length());
+    usleep(1000000);
+
+    std::ifstream fin((tmp_dir_ser / (std::to_string(random_name) + ".txt")).string(), std::ios::in);
+    char get_content;
+    if (fin) {
+        for (int i = 0; i < 1000000; i ++) {
+            if (fin >> get_content) {
+                EXPECT_EQ(get_content - '0', (random_content + i) % 10);
+            } else {
+                EXPECT_EQ(0, 1);
+            }
+        }
+        fin.close();
+    } else EXPECT_EQ(0, 1);
+
+    clearProcess(client_pid);
+    clearProcess(server_pid);
+}
+
+int _tmain(int argc, wchar_t* argv[]) {
+    testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}
